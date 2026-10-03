@@ -17,47 +17,92 @@ st.set_page_config(
 
 MODEL_DIR = Path("model")
 
-# Automatically find all YOLO models in the model folder
+# ค้นหาไฟล์โมเดล .pt ทั้งหมดในโฟลเดอร์ model
 model_files = sorted(MODEL_DIR.glob("*.pt"))
 
 if not model_files:
     st.error("ไม่พบไฟล์โมเดล .pt ในโฟลเดอร์ model/")
     st.stop()
 
+
 # ---------------------------------------------------------------------------
 # Sidebar
 # ---------------------------------------------------------------------------
 
 with st.sidebar:
+
     st.markdown("## 💧 Water Bottle Detection")
-    st.markdown("ระบบตรวจจับขวดน้ำด้วย **YOLO**")
+
+    st.markdown(
+        "ระบบตรวจจับขวดน้ำด้วย **YOLO**"
+    )
+
     st.markdown("---")
 
-    st.markdown("### เลือกโมเดล")
+    # -----------------------------------------------------------------------
+    # Model selection
+    # -----------------------------------------------------------------------
+
+    st.markdown("### 🤖 เลือกโมเดล")
 
     selected_model = st.selectbox(
         "Model",
         model_files,
         format_func=lambda x: x.stem,
+        label_visibility="collapsed",
     )
 
     st.markdown("---")
 
-    st.caption(f"โมเดล: `{selected_model}`")
-    st.caption("ไฟล์อัปโหลดจะถูกเก็บไว้ที่โฟลเดอร์ `upload/`")
 
+# ---------------------------------------------------------------------------
+# Load selected model
+# ---------------------------------------------------------------------------
+
+@st.cache_resource(show_spinner="กำลังโหลดโมเดล YOLO...")
+def load_model(model_path):
+
+    return YOLO(str(model_path))
+
+
+model = load_model(selected_model)
+
+class_names = model.model.names
+
+
+# ---------------------------------------------------------------------------
+# Sidebar - supported classes
+# ---------------------------------------------------------------------------
+
+with st.sidebar:
+
+    st.markdown("### 🏷️ ประเภทขวดที่รองรับ")
+
+    if isinstance(class_names, dict):
+
+        for cls_name in class_names.values():
+            st.markdown(f"- {cls_name}")
+
+    else:
+
+        for cls_name in class_names:
+            st.markdown(f"- {cls_name}")
+
+    st.markdown("---")
+
+    st.caption(
+        f"โมเดล: `{selected_model.name}`"
+    )
+
+    st.caption(
+        "ไฟล์อัปโหลดจะถูกเก็บไว้ที่โฟลเดอร์ `upload/`"
+    )
 
 # ---------------------------------------------------------------------------
 # Load model
 # ---------------------------------------------------------------------------
 
-@st.cache_resource(show_spinner="กำลังโหลดโมเดล YOLO...")
-def load_model(model_path):
-    return YOLO(str(model_path))
 
-
-model = load_model(selected_model)
-class_names = model.model.names
 
 
 # ---------------------------------------------------------------------------
@@ -164,19 +209,6 @@ st.caption(
 st.markdown("---")
 
 
-# ---------------------------------------------------------------------------
-# Supported classes
-# ---------------------------------------------------------------------------
-
-with st.expander("📋 ประเภทขวดที่โมเดลรองรับ"):
-
-    if isinstance(class_names, dict):
-        for cls_name in class_names.values():
-            st.markdown(f"- {cls_name}")
-    else:
-        for cls_name in class_names:
-            st.markdown(f"- {cls_name}")
-
 
 # ---------------------------------------------------------------------------
 # Tabs
@@ -277,7 +309,7 @@ with tab_video:
 
                 frame = cv2.resize(
                     frame,
-                    (1020, 600),
+                    (640, 640),
                 )
 
                 results = model.track(
@@ -384,7 +416,7 @@ with tab_webcam:
 
             frame = cv2.resize(
                 frame,
-                (1020, 600),
+                (640, 640),
             )
 
             results = model.track(
