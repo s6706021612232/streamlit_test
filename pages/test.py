@@ -1,8 +1,16 @@
 import streamlit as st
 import os
 import cv2
+import av
+
 from ultralytics import YOLO
 from pathlib import Path
+from streamlit_webrtc import webrtc_streamer, VideoProcessorBase
+
+
+# ===========================================================================
+# PAGE SETTINGS
+# ===========================================================================
 
 st.set_page_config(
     page_title="Water Bottle Detection",
@@ -11,39 +19,54 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ---------------------------------------------------------------------------
-# Model settings
-# ---------------------------------------------------------------------------
+
+# ===========================================================================
+# MODEL SETTINGS
+# ===========================================================================
 
 MODEL_DIR = Path("model")
 
-# ค้นหาไฟล์โมเดล .pt ทั้งหมดในโฟลเดอร์ model
-model_files = sorted(MODEL_DIR.glob("*.pt"))
+model_files = sorted(
+    MODEL_DIR.glob("*.pt")
+)
 
 if not model_files:
-    st.error("ไม่พบไฟล์โมเดล .pt ในโฟลเดอร์ model/")
+
+    st.error(
+        "ไม่พบไฟล์โมเดล .pt ในโฟลเดอร์ model/"
+    )
+
     st.stop()
 
 
-# ---------------------------------------------------------------------------
-# Sidebar
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# MAIN HEADER
+# ===========================================================================
 
-with st.sidebar:
+st.title(
+    "💧 ระบบตรวจจับขวดน้ำด้วย YOLO"
+)
 
-    st.markdown("## 💧 Water Bottle Detection")
+st.caption(
+    "ระบบตรวจจับและจำแนกประเภทขวดน้ำจากวิดีโอและเว็บแคม"
+)
+
+st.markdown("---")
+
+
+# ===========================================================================
+# MODEL SELECTION
+# ===========================================================================
+
+col_model, col_info = st.columns(
+    [2, 1]
+)
+
+with col_model:
 
     st.markdown(
-        "ระบบตรวจจับขวดน้ำด้วย **YOLO**"
+        "### 🤖 เลือกโมเดล"
     )
-
-    st.markdown("---")
-
-    # -----------------------------------------------------------------------
-    # Model selection
-    # -----------------------------------------------------------------------
-
-    st.markdown("### 🤖 เลือกโมเดล")
 
     selected_model = st.selectbox(
         "Model",
@@ -52,41 +75,90 @@ with st.sidebar:
         label_visibility="collapsed",
     )
 
-    st.markdown("---")
+
+with col_info:
+
+    st.markdown(
+        "### 📦 โมเดลที่เลือก"
+    )
+
+    st.info(
+        selected_model.name
+    )
 
 
-# ---------------------------------------------------------------------------
-# Load selected model
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# LOAD MODEL
+# ===========================================================================
 
-@st.cache_resource(show_spinner="กำลังโหลดโมเดล YOLO...")
+@st.cache_resource(
+    show_spinner="กำลังโหลดโมเดล YOLO..."
+)
 def load_model(model_path):
 
-    return YOLO(str(model_path))
+    return YOLO(
+        str(model_path)
+    )
 
 
-model = load_model(selected_model)
+model = load_model(
+    selected_model
+)
 
 class_names = model.model.names
 
 
-# ---------------------------------------------------------------------------
-# Sidebar - supported classes
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# CLASS NAME HELPER
+# ===========================================================================
+
+def get_class_name(class_id):
+
+    if isinstance(class_names, dict):
+
+        return class_names.get(
+            class_id,
+            str(class_id)
+        )
+
+    return class_names[class_id]
+
+
+# ===========================================================================
+# SIDEBAR
+# ===========================================================================
 
 with st.sidebar:
 
-    st.markdown("### 🏷️ ประเภทขวดที่รองรับ")
+    st.markdown(
+        "## 💧 Water Bottle Detection"
+    )
+
+    st.markdown(
+        "ระบบตรวจจับขวดน้ำด้วย **YOLO**"
+    )
+
+    st.markdown("---")
+
+    st.markdown(
+        "### 🏷️ ประเภทขวดที่รองรับ"
+    )
 
     if isinstance(class_names, dict):
 
         for cls_name in class_names.values():
-            st.markdown(f"- {cls_name}")
+
+            st.markdown(
+                f"- {cls_name}"
+            )
 
     else:
 
         for cls_name in class_names:
-            st.markdown(f"- {cls_name}")
+
+            st.markdown(
+                f"- {cls_name}"
+            )
 
     st.markdown("---")
 
@@ -98,121 +170,404 @@ with st.sidebar:
         "ไฟล์อัปโหลดจะถูกเก็บไว้ที่โฟลเดอร์ `upload/`"
     )
 
-# ---------------------------------------------------------------------------
-# Load model
-# ---------------------------------------------------------------------------
 
-
-
-
-# ---------------------------------------------------------------------------
-# Upload directory
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# UPLOAD DIRECTORY
+# ===========================================================================
 
 UPLOAD_DIR = "upload"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+os.makedirs(
+    UPLOAD_DIR,
+    exist_ok=True
+)
 
 
-# ---------------------------------------------------------------------------
-# Detection settings
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# DETECTION SETTINGS
+# ===========================================================================
 
-BOX_COLOR = (216, 138, 61)
-LABEL_TEXT_COLOR = (11, 15, 25)
+BOX_COLOR = (
+    216,
+    138,
+    61
+)
+
+LABEL_TEXT_COLOR = (
+    11,
+    15,
+    25
+)
 
 
-# ---------------------------------------------------------------------------
-# Draw detections
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# DRAW DETECTIONS
+# ===========================================================================
 
-def draw_detections(frame, results):
-    """วาดกรอบ ชื่อคลาส และ confidence score ลงบนเฟรม"""
+def draw_detections(
+    frame,
+    results
+):
 
-    if results[0].boxes is None:
+    if (
+        not results
+        or results[0].boxes is None
+    ):
+
         return frame
 
-    boxes = results[0].boxes.xyxy.int().cpu().tolist()
-    class_ids = results[0].boxes.cls.int().cpu().tolist()
-    confs = results[0].boxes.conf.cpu().tolist()
 
-    # Track IDs อาจไม่มี ถ้าไม่ได้ใช้ tracking
+    boxes = (
+        results[0]
+        .boxes
+        .xyxy
+        .int()
+        .cpu()
+        .tolist()
+    )
+
+
+    class_ids = (
+        results[0]
+        .boxes
+        .cls
+        .int()
+        .cpu()
+        .tolist()
+    )
+
+
+    confs = (
+        results[0]
+        .boxes
+        .conf
+        .cpu()
+        .tolist()
+    )
+
+
     if results[0].boxes.id is not None:
-        track_ids = results[0].boxes.id.int().cpu().tolist()
-    else:
-        track_ids = [None] * len(boxes)
 
-    for box, class_id, track_id, conf in zip(
+        track_ids = (
+            results[0]
+            .boxes
+            .id
+            .int()
+            .cpu()
+            .tolist()
+        )
+
+    else:
+
+        track_ids = [
+            None
+        ] * len(boxes)
+
+
+    for (
+        box,
+        class_id,
+        track_id,
+        conf
+    ) in zip(
         boxes,
         class_ids,
         track_ids,
         confs
     ):
+
         x1, y1, x2, y2 = box
 
-        class_name = class_names[class_id]
-
-        if track_id is not None:
-            label = f"#{track_id} {class_name} {conf:.2f}"
-        else:
-            label = f"{class_name} {conf:.2f}"
-
-        cv2.rectangle(
-            frame,
-            (x1, y1),
-            (x2, y2),
-            BOX_COLOR,
-            2
+        class_name = get_class_name(
+            class_id
         )
 
-        (tw, th), _ = cv2.getTextSize(
-            label,
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            2
-        )
 
-        # ป้องกัน label ล้นด้านบนของภาพ
-        label_y1 = max(y1 - th - 12, 0)
-        label_y2 = max(y1, th + 12)
+        # ===============================================================
+        # GOOD / BAD BOTTLE
+        # ===============================================================
 
-        cv2.rectangle(
-            frame,
-            (x1, label_y1),
-            (x1 + tw + 8, label_y2),
-            BOX_COLOR,
-            -1
-        )
+        if class_name in [
+            "good_bottle",
+            "bad_bottle"
+        ]:
 
-        cv2.putText(
-            frame,
-            label,
-            (x1 + 4, label_y2 - 6),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            LABEL_TEXT_COLOR,
-            2
-        )
+            if class_name == "good_bottle":
+
+                color = (
+                    0,
+                    200,
+                    0
+                )
+
+            else:
+
+                color = (
+                    0,
+                    0,
+                    255
+                )
+
+
+            label = (
+                f"{class_name} {conf:.2f}"
+            )
+
+
+            # -----------------------------------------------------------
+            # Bounding box
+            # -----------------------------------------------------------
+
+            cv2.rectangle(
+                frame,
+                (x1, y1),
+                (x2, y2),
+                color,
+                2
+            )
+
+
+            # -----------------------------------------------------------
+            # Label above box
+            # -----------------------------------------------------------
+
+            (
+                tw,
+                th
+            ), _ = cv2.getTextSize(
+                label,
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                2
+            )
+
+
+            label_y1 = max(
+                y1 - th - 12,
+                0
+            )
+
+
+            label_y2 = max(
+                y1,
+                th + 12
+            )
+
+
+            cv2.rectangle(
+                frame,
+                (x1, label_y1),
+                (
+                    x1 + tw + 8,
+                    label_y2
+                ),
+                color,
+                -1
+            )
+
+
+            cv2.putText(
+                frame,
+                label,
+                (
+                    x1 + 4,
+                    label_y2 - 6
+                ),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (
+                    255,
+                    255,
+                    255
+                ),
+                2
+            )
+
+
+        # ===============================================================
+        # HAVE CAP / NO CAP
+        # ===============================================================
+
+        elif class_name in [
+            "have_cap",
+            "no_cap"
+        ]:
+
+            if class_name == "have_cap":
+
+                color = (
+                    0,
+                    180,
+                    0
+                )
+
+            else:
+
+                color = (
+                    0,
+                    0,
+                    255
+                )
+
+
+            label = (
+                f"{class_name} {conf:.2f}"
+            )
+
+
+            # -----------------------------------------------------------
+            # Original cap bounding box
+            # -----------------------------------------------------------
+
+            cv2.rectangle(
+                frame,
+                (x1, y1),
+                (x2, y2),
+                color,
+                2
+            )
+
+
+            # -----------------------------------------------------------
+            # Label under cap box
+            # -----------------------------------------------------------
+
+            (
+                tw,
+                th
+            ), _ = cv2.getTextSize(
+                label,
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                2
+            )
+
+
+            label_x = x1
+
+            label_y1 = y2
+
+            label_y2 = (
+                y2 + th + 12
+            )
+
+
+            # -----------------------------------------------------------
+            # If label goes outside image,
+            # move it above the box.
+            # -----------------------------------------------------------
+
+            if label_y2 >= frame.shape[0]:
+
+                label_y1 = max(
+                    y1 - th - 12,
+                    0
+                )
+
+                label_y2 = y1
+
+
+            cv2.rectangle(
+                frame,
+                (
+                    label_x,
+                    label_y1
+                ),
+                (
+                    label_x + tw + 8,
+                    label_y2
+                ),
+                color,
+                -1
+            )
+
+
+            cv2.putText(
+                frame,
+                label,
+                (
+                    label_x + 4,
+                    label_y2 - 6
+                ),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (
+                    255,
+                    255,
+                    255
+                ),
+                2
+            )
+
 
     return frame
 
 
-# ---------------------------------------------------------------------------
-# Header
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# WEBCAM VIDEO PROCESSOR
+# ===========================================================================
 
-st.title("💧 ระบบตรวจจับขวดน้ำด้วย YOLO")
+class YOLOVideoProcessor(
+    VideoProcessorBase
+):
 
-st.caption(
-    "ระบบตรวจจับและจำแนกประเภทขวดน้ำจากวิดีโอและเว็บแคม"
-)
+    def __init__(self):
 
-st.markdown("---")
+        self.model = model
+
+        self.conf = 0.25
 
 
+    def recv(
+        self,
+        frame
+    ):
 
-# ---------------------------------------------------------------------------
-# Tabs
-# ---------------------------------------------------------------------------
+        # ---------------------------------------------------------------
+        # Convert WebRTC frame -> OpenCV BGR
+        # ---------------------------------------------------------------
+
+        img = frame.to_ndarray(
+            format="bgr24"
+        )
+
+
+        # ---------------------------------------------------------------
+        # YOLO Tracking
+        # ---------------------------------------------------------------
+
+        results = self.model.track(
+            img,
+            persist=True,
+            conf=self.conf,
+            imgsz=640,
+            verbose=False,
+        )
+
+
+        # ---------------------------------------------------------------
+        # Draw detections
+        # ---------------------------------------------------------------
+
+        img = draw_detections(
+            img,
+            results
+        )
+
+
+        # ---------------------------------------------------------------
+        # Convert OpenCV BGR -> WebRTC frame
+        # ---------------------------------------------------------------
+
+        return av.VideoFrame.from_ndarray(
+            img,
+            format="bgr24"
+        )
+
+
+# ===========================================================================
+# TABS
+# ===========================================================================
 
 tab_video, tab_webcam = st.tabs(
     [
@@ -223,14 +578,24 @@ tab_video, tab_webcam = st.tabs(
 
 
 # ===========================================================================
-# TAB 1: VIDEO
+# VIDEO TAB
 # ===========================================================================
 
 with tab_video:
 
-    st.subheader("อัปโหลดวิดีโอเพื่อตรวจจับขวดน้ำ")
+    st.subheader(
+        "อัปโหลดวิดีโอเพื่อตรวจจับขวดน้ำ"
+    )
 
-    col_upload, col_setting = st.columns([2, 1])
+
+    col_upload, col_setting = st.columns(
+        [2, 1]
+    )
+
+
+    # -----------------------------------------------------------------------
+    # Upload
+    # -----------------------------------------------------------------------
 
     with col_upload:
 
@@ -244,21 +609,33 @@ with tab_video:
             ],
         )
 
+
+    # -----------------------------------------------------------------------
+    # Settings
+    # -----------------------------------------------------------------------
+
     with col_setting:
 
         conf_video = st.slider(
             "Confidence threshold",
             0.0,
             1.0,
-            0.4,
+            0.65,
             0.05,
             key="conf_video",
         )
 
+
         skip_frame = st.checkbox(
             "ข้ามเฟรมเพื่อเพิ่มความเร็ว",
             value=True,
+            key="skip_video",
         )
+
+
+    # -----------------------------------------------------------------------
+    # Process uploaded video
+    # -----------------------------------------------------------------------
 
     if uploaded_file is not None:
 
@@ -267,12 +644,21 @@ with tab_video:
             uploaded_file.name,
         )
 
-        with open(save_path, "wb") as f:
-            f.write(uploaded_file.getbuffer())
+
+        with open(
+            save_path,
+            "wb"
+        ) as f:
+
+            f.write(
+                uploaded_file.getbuffer()
+            )
+
 
         st.success(
             f"บันทึกไฟล์ไว้ที่ `{save_path}` เรียบร้อยแล้ว"
         )
+
 
         start_video = st.button(
             "▶️  เริ่มตรวจจับ",
@@ -280,59 +666,111 @@ with tab_video:
             use_container_width=True,
         )
 
+
         if start_video:
 
-            cap = cv2.VideoCapture(save_path)
-
-            frame_placeholder = st.empty()
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-
-            total_frames = (
-                int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-                or 1
+            cap = cv2.VideoCapture(
+                save_path
             )
 
+
+            if not cap.isOpened():
+
+                st.error(
+                    "ไม่สามารถเปิดไฟล์วิดีโอได้"
+                )
+
+                st.stop()
+
+
+            frame_placeholder = st.empty()
+
+            progress_bar = st.progress(
+                0
+            )
+
+            status_text = st.empty()
+
+
+            total_frames = int(
+                cap.get(
+                    cv2.CAP_PROP_FRAME_COUNT
+                )
+            )
+
+
+            if total_frames <= 0:
+
+                total_frames = 1
+
+
             count = 0
+
 
             while cap.isOpened():
 
                 ret, frame = cap.read()
 
+
                 if not ret:
+
                     break
+
 
                 count += 1
 
-                if skip_frame and count % 2 != 0:
+
+                if (
+                    skip_frame
+                    and count % 2 != 0
+                ):
+
                     continue
 
-                frame = cv2.resize(
-                    frame,
-                    (640, 640),
-                )
+
+                # -------------------------------------------------------
+                # YOLO
+                # -------------------------------------------------------
 
                 results = model.track(
                     frame,
                     persist=True,
                     conf=conf_video,
+                    imgsz=640,
+                    verbose=False,
                 )
+
+
+                # -------------------------------------------------------
+                # Draw
+                # -------------------------------------------------------
 
                 frame = draw_detections(
                     frame,
                     results,
                 )
 
+
+                # -------------------------------------------------------
+                # BGR -> RGB
+                # -------------------------------------------------------
+
                 frame_rgb = cv2.cvtColor(
                     frame,
                     cv2.COLOR_BGR2RGB,
                 )
 
+
+                # -------------------------------------------------------
+                # Display
+                # -------------------------------------------------------
+
                 frame_placeholder.image(
                     frame_rgb,
                     channels="RGB",
-                    use_container_width=True,
+                    width=400,
                 )
+
 
                 progress_bar.progress(
                     min(
@@ -341,14 +779,20 @@ with tab_video:
                     )
                 )
 
+
                 status_text.caption(
-                    f"ประมวลผลเฟรมที่ {count} / {total_frames}"
+                    f"ประมวลผลเฟรมที่ "
+                    f"{count} / {total_frames}"
                 )
+
 
             cap.release()
 
+
             status_text.empty()
+
             progress_bar.empty()
+
 
             st.success(
                 "✅ ตรวจจับวิดีโอเสร็จสิ้น"
@@ -356,7 +800,7 @@ with tab_video:
 
 
 # ===========================================================================
-# TAB 2: WEBCAM
+# WEBCAM TAB
 # ===========================================================================
 
 with tab_webcam:
@@ -365,80 +809,75 @@ with tab_webcam:
         "ตรวจจับขวดน้ำแบบเรียลไทม์จากเว็บแคม"
     )
 
-    col_a, col_b = st.columns([1, 1])
 
-    with col_a:
-
-        conf_cam = st.slider(
-            "Confidence threshold",
-            0.0,
-            1.0,
-            0.4,
-            0.05,
-            key="conf_cam",
-        )
-
-    with col_b:
-
-        run_cam = st.checkbox(
-            "🔴 เปิดกล้องเว็บแคม"
-        )
-
-    cam_placeholder = st.empty()
-
-    st.caption(
-        "หมายเหตุ: ฟีเจอร์เว็บแคมเหมาะสำหรับการรันแอปบนเครื่อง "
-        "ที่มีกล้องเว็บแคมต่ออยู่"
+    st.markdown(
+        """
+        เว็บแคมส่วนนี้ใช้ **WebRTC** แทน `cv2.VideoCapture(0)`
+        ดังนั้นกล้องจะเป็นกล้องของ Browser ที่กำลังเปิด Streamlit
+        """
     )
 
-    if run_cam:
 
-        cap = cv2.VideoCapture(0)
+    # -----------------------------------------------------------------------
+    # Confidence
+    # -----------------------------------------------------------------------
 
-        count = 0
+    conf_cam = st.slider(
+        "Confidence threshold",
+        0.0,
+        1.0,
+        0.25,
+        0.05,
+        key="conf_cam",
+    )
 
-        while run_cam:
 
-            ret, frame = cap.read()
+    st.markdown("---")
 
-            if not ret:
 
-                st.error(
-                    "ไม่พบเว็บแคม กรุณาตรวจสอบการเชื่อมต่อกล้อง"
-                )
+    # =========================================================================
+    # WEBRTC
+    # =========================================================================
 
-                break
+    webrtc_ctx = webrtc_streamer(
+        key="water-bottle-webcam",
+        video_processor_factory=YOLOVideoProcessor,
+        media_stream_constraints={
+            "video": True,
+            "audio": False,
+        },
+        async_processing=True,
+    )
 
-            count += 1
 
-            if count % 2 != 0:
-                continue
+    # =========================================================================
+    # UPDATE CONFIDENCE
+    # =========================================================================
 
-            frame = cv2.resize(
-                frame,
-                (640, 640),
-            )
+    if webrtc_ctx.video_processor:
 
-            results = model.track(
-                frame,
-                persist=True,
-                conf=conf_cam,
-            )
+        webrtc_ctx.video_processor.conf = conf_cam
 
-            frame = draw_detections(
-                frame,
-                results,
-            )
 
-            frame_rgb = cv2.cvtColor(
-                frame,
-                cv2.COLOR_BGR2RGB,
-            )
+    # =========================================================================
+    # CAMERA STATUS
+    # =========================================================================
 
-            cam_placeholder.image(
-                frame_rgb,
-                channels="RGB",
-                use_container_width=True,
-            )
+    if webrtc_ctx.state.playing:
 
-        cap.release()
+        st.success(
+            "🟢 กล้องกำลังทำงาน"
+        )
+
+    else:
+
+        st.info(
+            "กดปุ่ม START ด้านบนเพื่อเปิดเว็บแคม "
+            "และกด Allow เมื่อ Browser ขอสิทธิ์ใช้กล้อง"
+        )
+
+
+    st.caption(
+        "หมายเหตุ: Browser ต้องได้รับอนุญาตให้เข้าถึงกล้อง "
+        "และหากนำไปใช้งานออนไลน์ แนะนำให้เปิดผ่าน HTTPS"
+    )
