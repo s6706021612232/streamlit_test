@@ -5,12 +5,9 @@ import plotly.express as px
 
 # Define the pages
 main_page = st.Page("pages/home.py", title="Main Page", icon="🎈")
-sale_predict = st.Page("pages/sale_predict.py", title="Regression", icon="❄️")
-cat_dog_classify = st.Page("pages/cat_dog_classification_app.py", title="Classification", icon="🎉")
-breeds_object_detection = st.Page("pages/object_detection_app.py", title="Detection", icon="🐶")
 bottle_OBJ_DETECT = st.Page("pages/test.py", title="Bottle", icon="💧")
 # Set up navigation
-pg = st.navigation([main_page, sale_predict, cat_dog_classify,breeds_object_detection, bottle_OBJ_DETECT])
+pg = st.navigation([main_page, bottle_OBJ_DETECT])
 
 # Run the selected page
 pg.run()
