@@ -54,12 +54,8 @@ st.caption(
 st.markdown("---")
 
 
-# ===========================================================================
-# MODEL SELECTION
-# ===========================================================================
-
-col_model, col_info = st.columns(
-    [2, 1]
+col_model, col_info, col_f1 = st.columns(
+    [2, 1, 1]
 )
 
 with col_model:
@@ -85,6 +81,36 @@ with col_info:
     st.info(
         selected_model.name
     )
+
+
+# ===========================================================================
+# F1 CONFIDENCE STATISTICS
+# ===========================================================================
+
+F1_STATS = {
+    "yolo8n": (0.93, 0.279),
+    "yolo11n": (0.93, 0.577),
+    "yolo12n": (0.93, 0.649),
+    "yolo26n": (0.93, 0.674),
+}
+
+
+with col_f1:
+
+    model_key = selected_model.stem.lower()
+
+    if model_key in F1_STATS:
+
+        f1, confidence = F1_STATS[model_key]
+
+        st.markdown(
+            "### 📊 F1 Confidence"
+        )
+
+        st.info(
+            f"All classes {f1:.2f} at {confidence:.3f}"
+        )
+
 
 
 # ===========================================================================
@@ -517,6 +543,10 @@ class YOLOVideoProcessor(
 
         self.conf = 0.25
 
+        # Prevent multiple frames from being
+        # processed at the same time.
+        self.processing = False
+
 
     def recv(
         self,
@@ -524,7 +554,7 @@ class YOLOVideoProcessor(
     ):
 
         # ---------------------------------------------------------------
-        # Convert WebRTC frame -> OpenCV BGR
+        # Browser laptop webcam -> OpenCV BGR
         # ---------------------------------------------------------------
 
         img = frame.to_ndarray(
@@ -533,30 +563,51 @@ class YOLOVideoProcessor(
 
 
         # ---------------------------------------------------------------
-        # YOLO Tracking
+        # Prevent frame-processing overload
         # ---------------------------------------------------------------
 
-        results = self.model.track(
-            img,
-            persist=True,
-            conf=self.conf,
-            imgsz=640,
-            verbose=False,
-        )
+        if self.processing:
+
+            return av.VideoFrame.from_ndarray(
+                img,
+                format="bgr24"
+            )
+
+
+        self.processing = True
+
+
+        try:
+
+            # -----------------------------------------------------------
+            # YOLO Tracking
+            # -----------------------------------------------------------
+
+            results = self.model.track(
+                img,
+                persist=True,
+                conf=self.conf,
+                imgsz=640,
+                verbose=False,
+            )
+
+
+            # -----------------------------------------------------------
+            # Draw detections
+            # -----------------------------------------------------------
+
+            img = draw_detections(
+                img,
+                results
+            )
+
+        finally:
+
+            self.processing = False
 
 
         # ---------------------------------------------------------------
-        # Draw detections
-        # ---------------------------------------------------------------
-
-        img = draw_detections(
-            img,
-            results
-        )
-
-
-        # ---------------------------------------------------------------
-        # Convert OpenCV BGR -> WebRTC frame
+        # OpenCV BGR -> Browser WebRTC
         # ---------------------------------------------------------------
 
         return av.VideoFrame.from_ndarray(
@@ -843,10 +894,14 @@ with tab_webcam:
         key="water-bottle-webcam",
         video_processor_factory=YOLOVideoProcessor,
         media_stream_constraints={
-            "video": True,
+            "video": {
+                "width": {"ideal": 640},
+                "height": {"ideal": 480},
+                "frameRate": {"ideal": 30},
+            },
             "audio": False,
         },
-        async_processing=True,
+        async_processing=False,
     )
 
 
