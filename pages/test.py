@@ -7,7 +7,6 @@ from ultralytics import YOLO
 from pathlib import Path
 from streamlit_webrtc import webrtc_streamer, VideoProcessorBase
 
-
 # ===========================================================================
 # PAGE SETTINGS
 # ===========================================================================
