@@ -6,7 +6,7 @@ plotly
 joblib
 tensorflow==2.19.1
 ultralytics>=8.1
-opencv-python-headless>=4.9
+opencv-python-headless
 lapx>=0.5.5
 streamlit-webrtc
 av
